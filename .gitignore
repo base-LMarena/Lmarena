@@ -36,6 +36,10 @@ dist/
 build/
 out/
 
+# Auto-generated CSS
+frontend/app/battle-styles.css
+**/battle-styles.css
+
 # Cache
 .cache/
 .temp/
