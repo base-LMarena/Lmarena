@@ -1,8 +1,25 @@
+// src/modules/mock/mock.service.ts
+
 import { Request, Response } from "express";
 import { z } from "zod";
 import { prisma } from "../../lib/prisma";
-import { updateElo, EloOutcome } from "./elo";
-import { callFlockModel, judgeFlock } from "../../lib/flock";
+import { updateElo, EloOutcome } from "../arena/elo";
+
+// -------- Mock LLM 응답 생성 --------
+export async function generateMockLLM(prompt: string, model: any) {
+  return `
+[MOCK RESPONSE - ${model.name}]
+Prompt: ${prompt}
+
+This is a mock response for testing during weekdays.
+  `;
+}
+
+// -------- Mock Judge --------
+async function mockJudge(prompt: string, responseA: string, responseB: string): Promise<"A" | "B" | "TIE"> {
+  const rand = Math.random();
+  return rand < 0.33 ? "A" : rand < 0.66 ? "B" : "TIE";
+}
 
 // -------- 매치 생성 스키마 --------
 const createMatchSchema = z.object({
@@ -21,9 +38,9 @@ const BASE_PARTICIPATION_SCORE = 1;
 const REF_CORRECT_BONUS = 3;
 
 /* ------------------------------------------------------------------ */
-/*  1. 매치 생성: /arena/match                                        */
+/*  Mock 매치 생성                                                     */
 /* ------------------------------------------------------------------ */
-export const createMatchHandler = async (req: Request, res: Response) => {
+export const createMockMatchHandler = async (req: Request, res: Response) => {
   const parsed = createMatchSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid body" });
@@ -32,11 +49,7 @@ export const createMatchHandler = async (req: Request, res: Response) => {
   const { prompt, userId } = parsed.data;
 
   try {
-    // Postman 헤더로 인해 Flock 호출 시 충돌 방지
-    delete req.headers["x-api-key"];
-    delete req.headers["authorization"];
-
-    console.log("🔥 [MATCH] Incoming request:", { prompt, userId });
+    console.log("🔥 [MOCK MATCH] Incoming request:", { prompt, userId });
 
     // 1) rating 상위 2개 모델
     const models = await prisma.model.findMany({
@@ -67,12 +80,12 @@ export const createMatchHandler = async (req: Request, res: Response) => {
       }
     });
 
-    // 실제 Flock API 호출
-    console.log("🟩 Calling REAL Flock API");
-    const responseAText = await callFlockModel(modelA.apiModelId, prompt);
-    const responseBText = await callFlockModel(modelB.apiModelId, prompt);
+    // 4) Mock 응답 생성
+    console.log("🟦 Using MOCK responses");
+    const responseAText = await generateMockLLM(prompt, modelA);
+    const responseBText = await generateMockLLM(prompt, modelB);
 
-    // 4) DB에 Response 저장
+    // 5) DB에 Response 저장
     const responseA = await prisma.response.create({
       data: {
         matchId: match.id,
@@ -100,18 +113,18 @@ export const createMatchHandler = async (req: Request, res: Response) => {
       responseB
     });
   } catch (err: any) {
-    console.error("❌ [MATCH ERROR]", err?.response?.data || err);
+    console.error("❌ [MOCK MATCH ERROR]", err);
     return res.status(500).json({
-      error: "Flock API call failed",
-      detail: err?.response?.data || String(err)
+      error: "Mock match creation failed",
+      detail: String(err)
     });
   }
 };
 
 /* ------------------------------------------------------------------ */
-/*  2. 투표: /arena/vote                                              */
+/*  Mock 투표                                                          */
 /* ------------------------------------------------------------------ */
-export const voteHandler = async (req: Request, res: Response) => {
+export const voteMockHandler = async (req: Request, res: Response) => {
   const parsed = voteSchema.safeParse(req.body);
   if (!parsed.success) {
     return res.status(400).json({ error: "Invalid body" });
@@ -120,9 +133,6 @@ export const voteHandler = async (req: Request, res: Response) => {
   const { matchId, chosen, userId } = parsed.data;
 
   try {
-    delete req.headers["x-api-key"];
-    delete req.headers["authorization"];
-
     // 1) match 조회
     const match = await prisma.match.findUnique({
       where: { id: matchId },
@@ -163,10 +173,10 @@ export const voteHandler = async (req: Request, res: Response) => {
       }
     });
 
-    console.log("⚖ [FLOCK JUDGE] evaluating...");
+    console.log("⚖ [MOCK JUDGE] evaluating...");
 
-    // 4) reference LLM judge (mock는 judge에 적용 X)
-    const refChoice = await judgeFlock(
+    // 4) Mock judge
+    const refChoice = await mockJudge(
       match.prompt.text,
       responseA.content,
       responseB.content
@@ -239,10 +249,11 @@ export const voteHandler = async (req: Request, res: Response) => {
       vote
     });
   } catch (err: any) {
-    console.error("❌ [VOTE ERROR]", err?.response?.data || err);
+    console.error("❌ [MOCK VOTE ERROR]", err);
     return res.status(500).json({
-      error: "Judge failed",
-      detail: err?.response?.data || String(err)
+      error: "Mock vote failed",
+      detail: String(err)
     });
   }
 };
+
