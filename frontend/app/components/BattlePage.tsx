@@ -35,6 +35,7 @@ export function BattlePage({ problem, initialPrompt, onNewChat }: BattlePageProp
   const { user } = usePrivy();
   const [currentBattle, setCurrentBattle] = useState<Battle | null>(null);
   const [selectedVote, setSelectedVote] = useState<VoteOption>(null);
+  const [refChoice, setRefChoice] = useState<'A' | 'B' | 'TIE' | null>(null);
   const [userPrompt, setUserPrompt] = useState(initialPrompt || '');
   const [isLoading, setIsLoading] = useState(false);
   const [isVoting, setIsVoting] = useState(false);
@@ -63,6 +64,7 @@ export function BattlePage({ problem, initialPrompt, onNewChat }: BattlePageProp
       });
       setUserPrompt('');
       setSelectedVote(null);
+      setRefChoice(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : '매치 생성 실패');
       console.error('Failed to create match:', err);
@@ -108,9 +110,7 @@ export function BattlePage({ problem, initialPrompt, onNewChat }: BattlePageProp
       console.log('투표 결과:', result);
       
       if (result.ok) {
-        // 투표 성공 - 화면은 유지하고 선택만 표시
-        // selectedVote는 유지되어 어떤 선택을 했는지 보여줌
-        alert(`투표 완료! AI 심판: ${result.refChoice || 'N/A'}, 총 점수: ${result.vote?.totalScore || 0}`);
+        setRefChoice(result.refChoice as 'A' | 'B' | 'TIE');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : '투표 실패');
@@ -191,9 +191,18 @@ export function BattlePage({ problem, initialPrompt, onNewChat }: BattlePageProp
           {/* Battle Arena - Two Responses */}
           <div className="grid md:grid-cols-2 gap-4 mb-6">
             {/* Assistant A */}
-            <Card className="p-6 hover:shadow-xl transition-all duration-300 border-2 max-h-[600px] flex flex-col group" style={{ borderColor: '#0052FF20' }}>
+            <Card className={`p-6 hover:shadow-xl transition-all duration-300 border-2 max-h-[600px] flex flex-col group ${
+              refChoice === 'A' ? 'ring-2 ring-blue-500' : ''
+            }`} style={{ borderColor: refChoice === 'A' ? '#0052FF' : '#0052FF20' }}>
               <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-100">
-                <h3 className="text-sm font-semibold text-gray-700">Assistant A</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-gray-700">Assistant A</h3>
+                  {refChoice === 'A' && (
+                    <span className="px-2 py-1 text-xs font-semibold rounded-full" style={{ backgroundColor: '#0052FF', color: 'white' }}>
+                      AI 선택 ✨
+                    </span>
+                  )}
+                </div>
                 <div className="flex gap-2">
                   <button 
                     onClick={() => handleCopy(currentBattle.responseA)}
@@ -218,9 +227,18 @@ export function BattlePage({ problem, initialPrompt, onNewChat }: BattlePageProp
             </Card>
 
             {/* Assistant B */}
-            <Card className="p-6 hover:shadow-xl transition-all duration-300 border-2 max-h-[600px] flex flex-col group" style={{ borderColor: '#0052FF20' }}>
+            <Card className={`p-6 hover:shadow-xl transition-all duration-300 border-2 max-h-[600px] flex flex-col group ${
+              refChoice === 'B' ? 'ring-2 ring-blue-500' : ''
+            }`} style={{ borderColor: refChoice === 'B' ? '#0052FF' : '#0052FF20' }}>
               <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-100">
-                <h3 className="text-sm font-semibold text-gray-700">Assistant B</h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-gray-700">Assistant B</h3>
+                  {refChoice === 'B' && (
+                    <span className="px-2 py-1 text-xs font-semibold rounded-full" style={{ backgroundColor: '#0052FF', color: 'white' }}>
+                      AI 선택 ✨
+                    </span>
+                  )}
+                </div>
                 <div className="flex gap-2">
                   <button 
                     onClick={() => handleCopy(currentBattle.responseB)}
@@ -250,8 +268,8 @@ export function BattlePage({ problem, initialPrompt, onNewChat }: BattlePageProp
             <Button
               variant="outline"
               onClick={() => handleVote('left')}
-              disabled={isVoting}
-              className={`px-6 transition-all duration-200 ${
+              disabled={isVoting || refChoice !== null}
+              className={`px-6 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
                 selectedVote === 'left' 
                   ? 'bg-blue-50 border-2 shadow-md scale-105' 
                   : 'hover:bg-gray-50 hover:shadow-sm'
@@ -263,8 +281,8 @@ export function BattlePage({ problem, initialPrompt, onNewChat }: BattlePageProp
             <Button
               variant="outline"
               onClick={() => handleVote('tie')}
-              disabled={isVoting}
-              className={`px-6 transition-all duration-200 ${
+              disabled={isVoting || refChoice !== null}
+              className={`px-6 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
                 selectedVote === 'tie' 
                   ? 'bg-blue-50 border-2 shadow-md scale-105' 
                   : 'hover:bg-gray-50 hover:shadow-sm'
@@ -276,21 +294,21 @@ export function BattlePage({ problem, initialPrompt, onNewChat }: BattlePageProp
             <Button
               variant="outline"
               onClick={() => handleVote('both-bad')}
-              disabled={isVoting}
-              className={`px-6 transition-all duration-200 ${
+              disabled={isVoting || refChoice !== null}
+              className={`px-6 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
                 selectedVote === 'both-bad' 
                   ? 'bg-blue-50 border-2 shadow-md scale-105' 
                   : 'hover:bg-gray-50 hover:shadow-sm'
               }`}
-              style={selectedVote === 'both-bad' ? { borderColor: '#0052FF' } : {}}
-            >
+              style={selectedVote === 'both-bad' ? { borderColor: '#0052FF' } : {}}>
+            
               Both are bad ⚠️
             </Button>
             <Button
               variant="outline"
               onClick={() => handleVote('right')}
-              disabled={isVoting}
-              className={`px-6 transition-all duration-200 ${
+              disabled={isVoting || refChoice !== null}
+              className={`px-6 transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed ${
                 selectedVote === 'right' 
                   ? 'bg-blue-50 border-2 shadow-md scale-105' 
                   : 'hover:bg-gray-50 hover:shadow-sm'
