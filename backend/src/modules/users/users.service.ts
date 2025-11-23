@@ -8,8 +8,8 @@ export const getUserProfileHandler = async (req: Request, res: Response) => {
   const { walletAddress } = req.params;
 
   try {
-    // 1) walletAddress로 User 찾기
-    const user = await prisma.user.findFirst({
+    // 1) walletAddress로 User 찾기 (없으면 자동 생성)
+    let user = await prisma.user.findFirst({
       where: { nickname: walletAddress },
       include: {
         posts: {
@@ -37,8 +37,35 @@ export const getUserProfileHandler = async (req: Request, res: Response) => {
       }
     });
 
+    // 유저가 없으면 자동 생성
     if (!user) {
-      return res.status(404).json({ error: "User not found" });
+      user = await prisma.user.create({
+        data: { nickname: walletAddress },
+        include: {
+          posts: {
+            include: {
+              match: {
+                include: {
+                  prompt: true,
+                  modelA: true,
+                  responses: true
+                }
+              },
+              postTags: {
+                include: {
+                  tag: true
+                }
+              }
+            }
+          },
+          _count: {
+            select: {
+              posts: true,
+              postLikes: true
+            }
+          }
+        }
+      });
     }
 
     // 2) 통계 계산
