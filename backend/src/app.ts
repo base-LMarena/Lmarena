@@ -9,6 +9,7 @@ import mockRouter from "./modules/mock/mock.routes";
 import promptsRouter from "./modules/prompts/prompts.routes";
 import { usersRouter } from "./modules/users/users.routes";
 import type { X402EndpointConfig } from "./lib/x402";
+import { startWeeklyRewardJob } from "./jobs/weeklyRewards";
 dotenv.config();
 
 export const createApp = (enableX402: boolean = true) => {
@@ -64,6 +65,11 @@ export const createApp = (enableX402: boolean = true) => {
 
   // users 라우터
   app.use("/users", usersRouter);
+
+  // Background jobs
+  if (process.env.ENABLE_WEEKLY_REWARD_JOB !== "false") {
+    startWeeklyRewardJob();
+  }
 
   return app;
 };

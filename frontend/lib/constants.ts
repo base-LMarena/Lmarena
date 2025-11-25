@@ -9,3 +9,6 @@ export const CATEGORY_COLORS: Record<Category, string> = {
   금융: 'bg-emerald-50 text-emerald-700 border-emerald-200',
   기타: 'bg-gray-50 text-gray-700 border-gray-200',
 };
+
+export const WEEKLY_REWARD_INTERVAL_MS = (Number(process.env.NEXT_PUBLIC_WEEKLY_REWARD_INTERVAL_SEC) || 60) * 1000;
+export const WEEKLY_REWARD_LABEL = '주간 보상 분배까지 남은 시간';

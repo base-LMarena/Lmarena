@@ -46,7 +46,7 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sharedPromptIds, setSharedPromptIds] = useState<Set<string>>(new Set());
-  const { pendingPayment, setPendingPayment, status: paymentStatus, setStatus: setPaymentStatus, paymentAuth, setPaymentAuth, lastAuth, setLastAuth, lastAuthAddress, approveForPayment, handlePaymentError } = usePayment(userAddress || undefined);
+  const { pendingPayment, setPendingPayment, status: paymentStatus, setStatus: setPaymentStatus, paymentAuth, setPaymentAuth, lastAuth, setLastAuth, lastAuthAddress, approveForPayment, signForPayment, handlePaymentError } = usePayment(userAddress || undefined);
 
   // 로컬 저장소에 공유된 matchId 기록
   useEffect(() => {
@@ -136,7 +136,7 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
       const normalizedAddr = userAddress?.toLowerCase?.();
       const addressMismatch =
         lastAuthAddress && normalizedAddr && lastAuthAddress !== normalizedAddr;
-      const authForRequest = authPayload ?? (addressMismatch ? null : paymentAuth ?? lastAuth);
+          const authForRequest = authPayload ?? (addressMismatch ? null : paymentAuth ?? lastAuth);
       await arenaApi.createChatStream(
         currentPrompt,
         // onChunk: 실시간 충크 추가
@@ -160,7 +160,6 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
 
           setIsLoading(false);
           setPaymentAuth(null);
-          setPaymentPermit(null);
           setPendingPayment(null);
           setLastAuth((paymentAuth ?? authPayload ?? lastAuth) || null);
           setPaymentStatus('idle');
@@ -171,7 +170,7 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
           setIsLoading(false);
           setPaymentStatus('idle');
         },
-        authForRequest, // legacy auth payload (not used)
+        authForRequest, // x402 auth payload
         userAddress || undefined
       );
     } catch (err: unknown) {
@@ -182,10 +181,11 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
           try {
             setPaymentStatus('authorizing');
             const approvalTx = await approveForPayment(pendingPayment);
-            setPaymentAuth(approvalTx); // dummy 저장
-            setLastAuth(approvalTx);
+            const authPayloadSigned = await signForPayment(pendingPayment);
+            setPaymentAuth(authPayloadSigned);
+            setLastAuth(authPayloadSigned);
             setPendingPayment(null);
-            await handleSubmitWithPrompt(currentPrompt, true, approvalTx);
+            await handleSubmitWithPrompt(currentPrompt, true, authPayloadSigned);
             return;
           } catch (signErr) {
             console.error('Auto sign failed:', signErr);
@@ -225,10 +225,11 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
       setPaymentStatus('authorizing');
       try {
         const approvalTx = await approveForPayment(pendingPayment);
-        setPaymentAuth(approvalTx);
-        setLastAuth(approvalTx);
+        const authPayloadSigned = await signForPayment(pendingPayment);
+        setPaymentAuth(authPayloadSigned);
+        setLastAuth(authPayloadSigned);
         setPendingPayment(null);
-        await handleSubmitWithPrompt(pendingPayment.prompt, true, approvalTx);
+        await handleSubmitWithPrompt(pendingPayment.prompt, true, authPayloadSigned);
       } finally {
         setPaymentStatus('idle');
       }

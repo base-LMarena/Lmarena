@@ -35,6 +35,8 @@ export async function buildPaymentRequiredPayload() {
     pay_to_address: PAY_TO_ADDRESS,
     amount: amount.toString(),
     message: '결제용 서명(authorization)이 필요합니다. 지갑에서 서명 후 다시 요청하세요.',
+    price: (Number(amount) / 1e6).toFixed(2),
+    network: process.env.X402_NETWORK || 'base-sepolia'
   };
 }
 

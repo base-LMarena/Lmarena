@@ -7,6 +7,7 @@
  */
 
 import { prisma } from './prisma';
+import { ethers } from 'ethers';
 
 export interface X402SignaturePayload {
   payload: {
@@ -83,9 +84,22 @@ export async function verifyX402Signature(payload: X402SignaturePayload): Promis
       return false;
     }
 
-    // TODO: ethers.js로 실제 서명 검증
-    console.log('[x402] Signature verification pending ethers.js installation');
-    return true;
+    try {
+      const message = createX402SignatureMessage(
+        payload.payload.chainId,
+        payload.payload.token,
+        payload.payload.pay_to_address,
+        payload.payload.amount,
+        payload.payload.price,
+        payload.payload.network,
+        payload.payload.description
+      );
+      const recovered = ethers.verifyMessage(message, payload.signature);
+      return recovered.toLowerCase() === payload.address.toLowerCase();
+    } catch (err) {
+      console.error('Failed to verify x402 signature with ethers:', err);
+      return false;
+    }
   } catch (error) {
     console.error('Failed to verify x402 signature:', error);
     return false;

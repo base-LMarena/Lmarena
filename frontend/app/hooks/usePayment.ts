@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useWalletClient, usePublicClient } from 'wagmi';
+import { useWalletClient, usePublicClient, useSignMessage } from 'wagmi';
 import { maxUint256 } from 'viem';
 import { PaymentRequiredError } from '../../lib/api';
 import { USDC_ADDRESS, USDC_ABI } from '../../lib/contracts/usdc-config';
@@ -11,9 +11,12 @@ type SetMessageFn = (v: { prompt: string; response: string; matchId?: string } |
 export interface PaymentState {
   pendingPayment: {
     token: string;
+    chainId?: number | string;
     pay_to_address?: string;
     amount: string;
     message?: string;
+    price?: string;
+    network?: string;
     prompt?: string;
     allowanceRequired?: boolean;
     reason?: string;
@@ -27,6 +30,7 @@ export interface PaymentState {
   setPaymentAuth: (v: string | null) => void;
   setLastAuth: (v: string | null) => void;
   approveForPayment: (payment: PaymentState['pendingPayment']) => Promise<string>;
+  signForPayment: (payment: PaymentState['pendingPayment']) => Promise<string>;
   handlePaymentError: (
     err: unknown,
     prompt: string,
@@ -60,6 +64,7 @@ export function usePayment(currentAddress?: string): PaymentState {
   const [status, setStatus] = useState<PaymentStatus>('idle');
   const { data: walletClient } = useWalletClient();
   const publicClient = usePublicClient();
+  const { signMessageAsync } = useSignMessage();
   const prevAddressRef = useRef<string | undefined>(currentAddress);
 
   // 지갑 주소가 바뀌면 저장된 서명 무효화
@@ -124,6 +129,29 @@ export function usePayment(currentAddress?: string): PaymentState {
     return txHash;
   };
 
+  const signForPayment = async (payment: PaymentState['pendingPayment']) => {
+    if (!walletClient) throw new Error('Wallet not connected');
+    const address = walletClient.account.address;
+    const price = payment.price || (Number(payment.amount || '0') / 1e6).toFixed(2);
+    const network = payment.network || 'base-sepolia';
+    const description = payment.message || 'API usage';
+    const payload = {
+      chainId: Number(payment.chainId ?? 84532),
+      token: payment.token,
+      pay_to_address: payment.pay_to_address as string,
+      amount: payment.amount,
+      price,
+      network,
+      description,
+      timestamp: Date.now(),
+    };
+    const message = `I authorize payment for ${payload.price} USD (${payload.amount} ${payload.token}) to ${payload.pay_to_address} on ${payload.network} chain for: ${payload.description}`;
+    const signature = await signMessageAsync({ message });
+    const raw = JSON.stringify({ payload, signature, address, timestamp: payload.timestamp });
+    const encoded = typeof window !== 'undefined' ? btoa(unescape(encodeURIComponent(raw))) : raw;
+    return encoded;
+  };
+
   const handlePaymentError = (
     err: unknown,
     prompt: string,
@@ -162,6 +190,7 @@ export function usePayment(currentAddress?: string): PaymentState {
     setPaymentAuth,
     setLastAuth,
     approveForPayment,
+    signForPayment,
     handlePaymentError,
   };
 }

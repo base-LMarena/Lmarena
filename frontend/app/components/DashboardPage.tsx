@@ -8,7 +8,7 @@ import { promptsApi, arenaApi } from '../../lib/api';
 import { useAuth } from '../hooks/useAuth';
 import { toast } from 'sonner';
 import { env } from '../../lib/config';
-import { Category, CATEGORIES, CATEGORY_COLORS } from '../../lib/constants';
+import { Category, CATEGORIES, CATEGORY_COLORS, WEEKLY_REWARD_INTERVAL_MS } from '../../lib/constants';
 
 interface Post {
   id: string;
@@ -53,6 +53,7 @@ export function DashboardPage({ onSelectPost, draftPost, onPostCreated }: Dashbo
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState<number>(WEEKLY_REWARD_INTERVAL_MS);
   const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
   const [sortBy, setSortBy] = useState<'latest' | 'popular'>('latest');
   const [hasMore, setHasMore] = useState(true);
@@ -92,6 +93,17 @@ export function DashboardPage({ onSelectPost, draftPost, onPostCreated }: Dashbo
     loadPrompts(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sortBy, selectedCategory, userAddress]);
+
+  // 주간 보상 카운트다운 (테스트 기본 1분)
+  useEffect(() => {
+    const start = Date.now();
+    const timer = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const remaining = WEEKLY_REWARD_INTERVAL_MS - (elapsed % WEEKLY_REWARD_INTERVAL_MS);
+      setCountdown(remaining);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
   useEffect(() => {
     if (draftPost && lastSharedMatchIdRef.current !== draftPost.matchId) {
@@ -170,6 +182,13 @@ export function DashboardPage({ onSelectPost, draftPost, onPostCreated }: Dashbo
     }
   };
 
+  const formatCountdown = (ms: number) => {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
+
   const handleLoadMore = () => {
     if (!isLoadingMore && hasMore) {
       loadPrompts(true);
@@ -235,7 +254,16 @@ export function DashboardPage({ onSelectPost, draftPost, onPostCreated }: Dashbo
   };
 
   return (
-    <div className="max-w-6xl mx-auto px-4 py-8">
+    <div className="max-w-6xl mx-auto px-4 py-8 space-y-4">
+      {/* Weekly reward countdown */}
+      <Card className="p-4 flex items-center gap-3 border-2 border-blue-100 bg-blue-50">
+        <Clock className="w-5 h-5 text-blue-600" />
+        <div className="flex flex-col sm:flex-row sm:items-center sm:gap-2 w-full justify-between">
+          <div className="text-sm text-blue-800">주간 보상 분배까지 남은 시간</div>
+          <div className="font-semibold text-lg text-blue-900">{formatCountdown(countdown)}</div>
+        </div>
+      </Card>
+
       {/* Test Mode Banner */}
       {env.USE_MOCK_DATA && (
         <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg">

@@ -5,6 +5,8 @@ const PAYMENT_TREASURY_ABI = [
   "function pricePerChat() view returns (uint256)",
   "function payWithAllowance(address payer, uint256 amount) external",
   "function payWithPermit(address payer, uint256 amount, uint256 deadline, uint8 v, bytes32 r, bytes32 s) external",
+  "function claimAchievement(uint256 achievementId, address recipient, uint256 amount, bytes32 nonce, bytes calldata signature) external",
+  "function claimWeekly(uint256 week, uint8 rank, address recipient, uint256 amount, bytes32 nonce, bytes calldata signature) external",
 ];
 
 const getProvider = () => {
@@ -89,4 +91,94 @@ export async function chargePaymentTreasury(
     }
     throw allowErr;
   }
+}
+
+export type AchievementSignature = {
+  nonce: string;
+  signature: string;
+};
+
+export async function signAchievementReward(achievementId: number, recipient: string, amount: bigint): Promise<AchievementSignature> {
+  const signerKey = process.env.REWARD_SIGNER_PRIVATE_KEY;
+  if (!signerKey || signerKey.length < 10) {
+    throw new Error("REWARD_SIGNER_PRIVATE_KEY is not configured");
+  }
+  const key = signerKey.startsWith("0x") ? signerKey : `0x${signerKey}`;
+  const wallet = new ethers.Wallet(key);
+  const nonceBytes = ethers.randomBytes(32);
+  const nonce = ethers.hexlify(nonceBytes);
+
+  const digest = ethers.solidityPackedKeccak256(
+    ["string", "uint256", "address", "uint256", "address", "uint256", "bytes32"],
+    ["ACHIEVEMENT", Number(env.chainId), env.payToAddress, achievementId, recipient, amount, nonce]
+  );
+  const signature = await wallet.signMessage(ethers.getBytes(digest));
+
+  return { nonce, signature: signature };
+}
+
+export async function claimAchievementOnChain(
+  achievementId: number,
+  recipient: string,
+  amount: bigint,
+  nonce: string,
+  signature: string
+): Promise<{ txHash: string }> {
+  const privateKey = env.facilitatorKey;
+  if (!privateKey || privateKey.length < 10) {
+    throw new Error("FACILITATOR_PRIVATE_KEY is not configured");
+  }
+  const provider = getProvider();
+  const key = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
+  const signer = new ethers.Wallet(key, provider);
+  const contract = getContract(signer);
+
+  const tx = await contract.claimAchievement(achievementId, recipient, amount, nonce, signature as `0x${string}`);
+  const receipt = await tx.wait();
+  return { txHash: receipt?.hash ?? tx.hash };
+}
+
+export type WeeklySignature = {
+  nonce: string;
+  signature: string;
+};
+
+export async function signWeeklyReward(week: number, rank: number, recipient: string, amount: bigint): Promise<WeeklySignature> {
+  const signerKey = process.env.REWARD_SIGNER_PRIVATE_KEY;
+  if (!signerKey || signerKey.length < 10) {
+    throw new Error("REWARD_SIGNER_PRIVATE_KEY is not configured");
+  }
+  const key = signerKey.startsWith("0x") ? signerKey : `0x${signerKey}`;
+  const wallet = new ethers.Wallet(key);
+  const nonceBytes = ethers.randomBytes(32);
+  const nonce = ethers.hexlify(nonceBytes);
+
+  const digest = ethers.solidityPackedKeccak256(
+    ["string", "uint256", "address", "uint256", "uint8", "address", "uint256", "bytes32"],
+    ["WEEKLY", Number(env.chainId), env.payToAddress, week, rank, recipient, amount, nonce]
+  );
+  const signature = await wallet.signMessage(ethers.getBytes(digest));
+  return { nonce, signature };
+}
+
+export async function claimWeeklyOnChain(
+  week: number,
+  rank: number,
+  recipient: string,
+  amount: bigint,
+  nonce: string,
+  signature: string
+): Promise<{ txHash: string }> {
+  const privateKey = env.facilitatorKey;
+  if (!privateKey || privateKey.length < 10) {
+    throw new Error("FACILITATOR_PRIVATE_KEY is not configured");
+  }
+  const provider = getProvider();
+  const key = privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`;
+  const signer = new ethers.Wallet(key, provider);
+  const contract = getContract(signer);
+
+  const tx = await contract.claimWeekly(week, rank, recipient, amount, nonce, signature as `0x${string}`);
+  const receipt = await tx.wait();
+  return { txHash: receipt?.hash ?? tx.hash };
 }

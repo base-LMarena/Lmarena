@@ -2,9 +2,10 @@
 
 import { useEffect, useState } from 'react';
 import { Card } from './ui/card';
-import { Trophy, Loader2, X, Heart, Users } from 'lucide-react';
+import { Trophy, Loader2, X, Heart, Users, Clock } from 'lucide-react';
 import { leaderboardApi, usersApi } from '../../lib/api';
 import { PromptItem } from '../../lib/types';
+import { WEEKLY_REWARD_INTERVAL_MS, WEEKLY_REWARD_LABEL } from '../../lib/constants';
 
 interface ModelRanking {
   rank: number;
@@ -39,6 +40,7 @@ export function LeaderboardPage({ onSelectPost }: LeaderboardPageProps) {
   const [selectedUser, setSelectedUser] = useState<{ nickname: string; posts: PromptItem[] } | null>(null);
   const [isLoadingUserPosts, setIsLoadingUserPosts] = useState(false);
   const [userPostsError, setUserPostsError] = useState<string | null>(null);
+  const [countdown, setCountdown] = useState<number>(WEEKLY_REWARD_INTERVAL_MS);
 
   useEffect(() => {
     const fetchLeaderboards = async () => {
@@ -69,6 +71,24 @@ export function LeaderboardPage({ onSelectPost }: LeaderboardPageProps) {
 
     fetchLeaderboards();
   }, []);
+
+  // 주간 보상 카운트다운
+  useEffect(() => {
+    const start = Date.now();
+    const timer = setInterval(() => {
+      const elapsed = Date.now() - start;
+      const remaining = WEEKLY_REWARD_INTERVAL_MS - (elapsed % WEEKLY_REWARD_INTERVAL_MS);
+      setCountdown(remaining);
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatCountdown = (ms: number) => {
+    const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+  };
 
   const getRankColor = (rank: number) => {
     if (rank === 1) return '#FFD700';
@@ -102,6 +122,11 @@ export function LeaderboardPage({ onSelectPost }: LeaderboardPageProps) {
         <p className="text-gray-600">
           Top models and prompt creators in the Base Battle arena
         </p>
+        <div className="mt-3 inline-flex items-center gap-2 px-3 py-2 rounded-lg bg-blue-50 border border-blue-100 text-sm text-blue-800">
+          <Clock className="w-4 h-4 text-blue-600" />
+          <span className="font-medium">{WEEKLY_REWARD_LABEL}:</span>
+          <span className="font-semibold text-blue-900">{formatCountdown(countdown)}</span>
+        </div>
       </div>
 
       {error && (

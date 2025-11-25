@@ -32,6 +32,8 @@ export interface PaymentRequiredPayload {
   pay_to_address: string;
   amount: string;
   message?: string;
+  price?: string;
+  network?: string;
   allowanceRequired?: boolean;
   reason?: string;
 }

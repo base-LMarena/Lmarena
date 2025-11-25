@@ -3,6 +3,8 @@ import { z } from "zod";
 import { prisma } from "../../lib/prisma";
 import { normalizeCategory } from "../prompts/category";
 import { evaluateAchievementsForUser, getUserAchievementContext, enrichAchievementsWithProgress } from "./achievements.util";
+import { signAchievementReward, claimAchievementOnChain } from "../../lib/payment-treasury";
+import { ethers } from "ethers";
 
 /* ------------------------------------------------------------------ */
 /*  Helper: Calculate Level with XP System                           */
@@ -169,14 +171,39 @@ export const claimAchievementHandler = async (req: Request, res: Response) => {
       return res.json({ ok: true, claimed: true });
     }
 
-    // TODO: Onchain reward hook (e.g., mint badge, send token). Placeholder for future integration.
+    // Onchain reward: sign + claim via PaymentTreasury
+    const achievement = await prisma.achievement.findUnique({ where: { id: achId } });
+    if (!achievement) {
+      return res.status(404).json({ error: "Achievement not found" });
+    }
+    const amount = BigInt(achievement.reward);
 
-    await prisma.userAchievement.update({
-      where: { id: ua.id },
-      data: { claimed: true }
-    });
+    try {
+      const { nonce, signature } = await signAchievementReward(achId, walletAddress, amount);
+      console.log("[ACHIEVEMENT][SIGN]", {
+        achievementId: achId,
+        wallet: walletAddress,
+        amount: amount.toString(),
+        nonce,
+      });
+      const { txHash } = await claimAchievementOnChain(achId, walletAddress, amount, nonce, signature);
+      console.log("[ACHIEVEMENT][CLAIMED]", {
+        achievementId: achId,
+        wallet: walletAddress,
+        amount: amount.toString(),
+        txHash,
+      });
 
-    return res.json({ ok: true, claimed: true });
+      await prisma.userAchievement.update({
+        where: { id: ua.id },
+        data: { claimed: true }
+      });
+
+      return res.json({ ok: true, claimed: true, txHash });
+    } catch (err: any) {
+      console.error("❌ [ACHIEVEMENT ONCHAIN CLAIM ERROR]", err);
+      return res.status(500).json({ error: err?.message || "Failed to claim achievement onchain" });
+    }
   } catch (err: any) {
     console.error("❌ [CLAIM ACHIEVEMENT ERROR]", err);
     return res.status(500).json({ error: "Failed to claim achievement" });

@@ -5,6 +5,7 @@ import { callFlockModel, callFlockModelStream } from "../../lib/flock";
 import { ALLOWED_CATEGORIES, normalizeCategory } from "../prompts/category";
 import { buildPaymentRequiredPayload, recordPaymentAuthorization } from "../../lib/payment";
 import { chargePaymentTreasury, type PaymentPermit } from "../../lib/payment-treasury";
+import { verifyX402Signature, type X402SignaturePayload } from "../../lib/x402-verification";
 
 // -------- 채팅 생성 스키마 (단일 모델) --------
 const createChatSchema = z.object({
@@ -68,6 +69,7 @@ export const createChatHandler = async (req: Request, res: Response) => {
   }
 
   const { prompt, userId, walletAddress } = parsed.data;
+  const paymentAuthorization = req.headers['x-payment-authorization'] as string | undefined;
   const permitHeader = req.headers['x-payment-permit'] as string | undefined;
   let permit: PaymentPermit | undefined;
   if (permitHeader) {
@@ -89,11 +91,51 @@ export const createChatHandler = async (req: Request, res: Response) => {
   }
 
   // ------------------------------------------------------------------
-  // 결제: PaymentTreasury에서 pricePerChat 만큼 자동 차감
+  // 결제: x402 서명 검증 후 PaymentTreasury에서 pricePerChat 만큼 자동 차감
   // ------------------------------------------------------------------
   const paymentPayload = await buildPaymentRequiredPayload();
+  console.log("[PAYMENT][CHAT] incoming", {
+    wallet: walletAddress,
+    amount: paymentPayload.amount,
+    payTo: paymentPayload.pay_to_address,
+    hasPermit: !!permit,
+  });
+  if (!paymentAuthorization) {
+    return res.status(402).json({
+      error: "Payment Required",
+      payment: paymentPayload
+    });
+  }
+  try {
+    let rawAuth = paymentAuthorization;
+    try {
+      rawAuth = Buffer.from(paymentAuthorization, 'base64').toString('utf8');
+    } catch {
+      // not base64, continue with raw string
+    }
+    const parsedAuth = JSON.parse(rawAuth) as X402SignaturePayload;
+    const isValidSignature = await verifyX402Signature(parsedAuth);
+    if (!isValidSignature) {
+      return res.status(400).json({ error: "Invalid payment signature" });
+    }
+    if (parsedAuth.address?.toLowerCase() !== walletAddress.toLowerCase()) {
+      return res.status(400).json({ error: "Payment address mismatch" });
+    }
+    if (parsedAuth.payload?.pay_to_address?.toLowerCase() !== paymentPayload.pay_to_address.toLowerCase()) {
+      return res.status(400).json({ error: "Payment address invalid" });
+    }
+  } catch (err) {
+    return res.status(400).json({ error: "Invalid payment authorization format" });
+  }
+
   try {
     const { txHash, amount } = await chargePaymentTreasury(walletAddress, permit);
+    console.log("[PAYMENT][CHAT] charged", {
+      wallet: walletAddress,
+      amount: amount.toString(),
+      txHash,
+      method: permit ? "permit" : "allowance",
+    });
     await recordPaymentAuthorization(walletAddress, {
       nonce: txHash,
       amount: amount.toString(),
@@ -190,32 +232,57 @@ export const createChatStreamHandler = async (req: Request, res: Response) => {
   }
 
   const { prompt, userId, walletAddress } = parsed.data;
-  const permitHeader = req.headers['x-payment-permit'] as string | undefined;
-  let permit: PaymentPermit | undefined;
-  if (permitHeader) {
-    try {
-      const parsedPermit = JSON.parse(permitHeader);
-      permit = {
-        deadline: BigInt(parsedPermit.deadline),
-        v: parsedPermit.v,
-        r: parsedPermit.r,
-        s: parsedPermit.s,
-      };
-    } catch (err) {
-      return res.status(400).json({ error: "Invalid payment permit format" });
-    }
-  }
+  const paymentAuthorization = req.headers['x-payment-authorization'] as string | undefined;
 
   if (!walletAddress) {
     return res.status(400).json({ error: "walletAddress is required for payment" });
   }
 
   // ------------------------------------------------------------------
-  // 결제: PaymentTreasury에서 pricePerChat 만큼 자동 차감
+  // 결제: x402 서명 검증 후 PaymentTreasury에서 pricePerChat 만큼 자동 차감
   // ------------------------------------------------------------------
   const paymentPayload = await buildPaymentRequiredPayload();
+  console.log("[PAYMENT][STREAM] incoming", {
+    wallet: walletAddress,
+    amount: paymentPayload.amount,
+    payTo: paymentPayload.pay_to_address,
+  });
+  if (!paymentAuthorization) {
+    return res.status(402).json({
+      error: "Payment Required",
+      payment: paymentPayload
+    });
+  }
   try {
-    const { txHash, amount } = await chargePaymentTreasury(walletAddress, permit);
+    let rawAuth = paymentAuthorization;
+    try {
+      rawAuth = Buffer.from(paymentAuthorization, 'base64').toString('utf8');
+    } catch {
+      // ignore
+    }
+    const parsedAuth = JSON.parse(rawAuth) as X402SignaturePayload;
+    const isValidSignature = await verifyX402Signature(parsedAuth);
+    if (!isValidSignature) {
+      return res.status(400).json({ error: "Invalid payment signature" });
+    }
+    if (parsedAuth.address?.toLowerCase() !== walletAddress.toLowerCase()) {
+      return res.status(400).json({ error: "Payment address mismatch" });
+    }
+    if (parsedAuth.payload?.pay_to_address?.toLowerCase() !== paymentPayload.pay_to_address.toLowerCase()) {
+      return res.status(400).json({ error: "Payment address invalid" });
+    }
+  } catch (err) {
+    return res.status(400).json({ error: "Invalid payment authorization format" });
+  }
+
+  try {
+    const { txHash, amount } = await chargePaymentTreasury(walletAddress);
+    console.log("[PAYMENT][STREAM] charged", {
+      wallet: walletAddress,
+      amount: amount.toString(),
+      txHash,
+      method: "allowance",
+    });
     await recordPaymentAuthorization(walletAddress, {
       nonce: txHash,
       amount: amount.toString(),
