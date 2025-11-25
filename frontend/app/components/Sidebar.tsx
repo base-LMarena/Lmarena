@@ -79,19 +79,13 @@ export function Sidebar({
               title={!isOpen ? ' Proof-of-Prompt ' : undefined}
             >
               {!isOpen && (
-                <span 
-                  className="hidden lg:block text-xs font-semibold cursor-pointer" 
-                  style={{ 
-                    color: '#0052FF', 
-                    fontFamily: 'system-ui, -apple-system, sans-serif', 
-                    fontWeight: '600', 
-                    letterSpacing: '-0.02em',
-                    writingMode: 'vertical-rl',
-                    textOrientation: 'mixed'
-                  }}
-                >
-                  LM
-                </span>
+                <div className="hidden lg:block relative w-8 h-8">
+                  <img 
+                    src="/images/pop_logo.png" 
+                    alt="POP Logo" 
+                    className="object-contain w-full h-full"
+                  />
+                </div>
               )}
               {isOpen && (
                 <span 

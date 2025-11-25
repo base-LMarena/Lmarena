@@ -50,9 +50,9 @@ export function Providers({ children }: { children: ReactNode }) {
       appearance: {
         theme: 'light' as const,
         accentColor: '#0052FF' as `#${string}`,
-        logo: 'https://www.base.org/favicon.png',
+        logo: '/images/pop_logo.png',
         showWalletLoginFirst: true,
-        walletList: ['metamask', 'coinbase_wallet'] as const,
+        walletList: ['metamask', 'coinbase_wallet'],
         showWalletList: true,
       },
       supportedChains: [base, baseSepolia],
