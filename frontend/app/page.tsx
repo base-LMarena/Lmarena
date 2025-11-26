@@ -12,16 +12,6 @@ import { ProfilePage } from './components/ProfilePage';
 
 type Page = 'home' | 'dashboard' | 'conversation' | 'leaderboard' | 'profile';
 
-interface Problem {
-  id: string;
-  title: string;
-  description: string;
-  difficulty: 'easy' | 'medium' | 'hard';
-  category: string;
-  votes: number;
-  createdAt: string;
-}
-
 interface ChatHistoryItem {
   id: string;
   matchId: string;
@@ -37,12 +27,12 @@ export default function Home() {
   // 페이지 상태를 localStorage에서 복원
   const [currentPage, setCurrentPage] = useState<Page>('home');
   const [sidebarOpen, setSidebarOpen] = useState(true);
-  const [selectedProblem, setSelectedProblem] = useState<Problem | null>(null);
-  const [directPrompt, setDirectPrompt] = useState<string>('');
   const [selectedPostId, setSelectedPostId] = useState<string | null>(null);
   const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [chatHistory, setChatHistory] = useState<ChatHistoryItem[]>([]);
   const [draftPost, setDraftPost] = useState<{ matchId: string; prompt: string; response: string } | null>(null);
+  const [selectedChat, setSelectedChat] = useState<ChatHistoryItem | null>(null);
+  const [homeResetKey, setHomeResetKey] = useState(0);
 
   // 초기 마운트 시 localStorage에서 상태 복원
   useEffect(() => {
@@ -119,8 +109,12 @@ export default function Home() {
 
   // 채팅 선택 핸들러
   const handleSelectChat = (chatId: string) => {
-    setActiveChatId(chatId);
-    setCurrentPage('home');
+    const chat = chatHistory.find((c) => c.id === chatId) || null;
+    setSelectedChat(chat);
+    setActiveChatId(chatId); // UI highlight uses history id
+    setSelectedPostId(chat?.matchId ?? null); // conversation fetch uses matchId
+    setDraftPost(null);
+    setCurrentPage('conversation');
   };
 
   // 채팅 삭제 핸들러
@@ -133,11 +127,11 @@ export default function Home() {
 
   const handleNewChat = () => {
     setCurrentPage('home');
-    setSelectedProblem(null);
-    setDirectPrompt('');
     setSelectedPostId(null);
     setActiveChatId(null);
     setDraftPost(null); // Clear draft post
+    setSelectedChat(null);
+    setHomeResetKey(prev => prev + 1);
     // localStorage 정리
     if (typeof window !== 'undefined') {
       localStorage.setItem('currentPage', 'home');
@@ -146,24 +140,14 @@ export default function Home() {
     }
   };
 
-  const handleStartBattle = (prompt: string) => {
-    setDirectPrompt(prompt);
-    setCurrentPage('dashboard');
-  };
-
-  const handleSelectProblem = (problem: Problem) => {
-    setSelectedProblem(problem);
-    setCurrentPage('dashboard');
-  };
-
   const handleSelectPost = (postId: string) => {
     setSelectedPostId(postId);
     setActiveChatId(null); // Clear activeChatId when coming from dashboard
     setCurrentPage('conversation');
   };
 
-  const handleShareToDashboard = (matchId: string, prompt: string, response: string) => {
-    setDraftPost({ matchId, prompt, response });
+  const handleShareToDashboard = (sharedPromptId: string) => {
+    setSelectedPostId(sharedPromptId);
     setCurrentPage('dashboard');
   };
 
@@ -188,29 +172,29 @@ export default function Home() {
     switch (currentPage) {
       case 'home':
         return (
-          <HomePage 
-            onStartBattle={handleStartBattle} 
+          <HomePage
+            onStartBattle={handleNewChat} 
             onBack={handleNewChat} 
             initialChatId={activeChatId}
+            initialChat={selectedChat}
             onChatCreated={addChatToHistory}
             chatHistory={chatHistory}
             onShareToDashboard={handleShareToDashboard}
+            resetKey={homeResetKey}
           />
         );
       case 'dashboard':
         return <DashboardPage onNewChat={handleNewChat} onSelectPost={handleSelectPost} draftPost={draftPost} onPostCreated={handlePostCreated} />;
       case 'conversation':
-        return selectedPostId ? (
-          <ConversationPage postId={selectedPostId} onBack={handleBackFromConversation} />
-        ) : (
-          <DashboardPage onNewChat={handleNewChat} onSelectPost={handleSelectPost} />
+        return (
+          <ConversationPage postId={selectedPostId || activeChatId || ""} onBack={handleBackFromConversation} />
         );
       case 'leaderboard':
-        return <LeaderboardPage />;
+        return <LeaderboardPage onSelectPost={handleSelectPost} />;
       case 'profile':
         return <ProfilePage />;
       default:
-        return <HomePage onStartBattle={handleStartBattle} onBack={handleNewChat} />;
+        return <HomePage onStartBattle={handleNewChat} onBack={handleNewChat} />;
     }
   };
 
@@ -260,7 +244,7 @@ export default function Home() {
                   letterSpacing: '-0.02em' 
                 }}
               >
-                LM Battle
+                 Proof-of-Prompt 
               </span>
             </button>
             <div className="flex-1 lg:flex-none" />
@@ -276,6 +260,7 @@ export default function Home() {
           {renderPage()}
         </main>
       </div>
+
     </div>
   );
 }

@@ -1,5 +1,6 @@
 'use client';
 
+import Image from 'next/image';
 import { Home, LayoutDashboard, Trophy, User, Menu, Plus, ChevronLeft, MessageSquare, Trash2 } from 'lucide-react';
 import { Button } from './ui/button';
 
@@ -76,22 +77,19 @@ export function Sidebar({
                 onNavigate('home');
               }}
               className={`flex items-center gap-1 hover:opacity-80 transition-opacity ${!isOpen && 'lg:flex-col lg:gap-0'}`}
-              title={!isOpen ? 'LM Battle' : undefined}
+              title={!isOpen ? ' Proof-of-Prompt ' : undefined}
             >
               {!isOpen && (
-                <span 
-                  className="hidden lg:block text-xs font-semibold cursor-pointer" 
-                  style={{ 
-                    color: '#0052FF', 
-                    fontFamily: 'system-ui, -apple-system, sans-serif', 
-                    fontWeight: '600', 
-                    letterSpacing: '-0.02em',
-                    writingMode: 'vertical-rl',
-                    textOrientation: 'mixed'
-                  }}
-                >
-                  LM
-                </span>
+                <div className="hidden lg:block relative w-8 h-8">
+                  <Image
+                    src="/images/pop_logo.png"
+                    alt="POP Logo"
+                    fill
+                    className="object-contain"
+                    sizes="32px"
+                    priority={false}
+                  />
+                </div>
               )}
               {isOpen && (
                 <span 
@@ -103,7 +101,7 @@ export function Sidebar({
                     letterSpacing: '-0.02em' 
                   }}
                 >
-                  LM Battle
+                   Proof-of-Prompt 
                 </span>
               )}
             </button>

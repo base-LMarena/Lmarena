@@ -1,14 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, type ReactNode } from 'react';
 import { Button } from './ui/button';
 import { Card } from './ui/card';
 import { Textarea } from './ui/textarea';
 import { Copy, Maximize2, Loader2, Share2, ArrowLeft } from 'lucide-react';
-import { arenaApi } from '../../lib/api';
+import { arenaApi, promptsApi } from '../../lib/api';
+import { env } from '../../lib/config';
 import { useAuth } from '../hooks/useAuth';
+import { usePayment } from '../hooks/usePayment';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { toast } from 'sonner';
 import { CodeBlock } from './CodeBlock';
+const AUTH_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 interface ChatMessage {
   matchId?: string;
@@ -31,20 +34,46 @@ interface HomePageProps {
   onStartBattle?: (prompt: string) => void;
   onBack?: () => void;
   initialChatId?: string | null;
+  initialChat?: { prompt: string; response: string; matchId?: string } | null;
   onChatCreated?: (matchId: string, prompt: string, response: string) => void;
   chatHistory?: ChatHistoryItem[];
-  onShareToDashboard?: (matchId: string, prompt: string, response: string) => void;
+  onShareToDashboard?: (sharedPromptId: string) => void;
+  resetKey?: number;
 }
 
-export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [], onShareToDashboard }: HomePageProps) {
-  const { requireAuth } = useAuth();
+export function HomePage({ onBack, initialChatId, initialChat, onChatCreated, chatHistory = [], onShareToDashboard, resetKey }: HomePageProps) {
+  const { requireAuth, userAddress } = useAuth();
   const [prompt, setPrompt] = useState('');
   const [currentMessage, setCurrentMessage] = useState<ChatMessage | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [sharedPromptIds, setSharedPromptIds] = useState<Set<string>>(new Set());
+  const { pendingPayment, setPendingPayment, status: paymentStatus, setStatus: setPaymentStatus, paymentAuth, setPaymentAuth, lastAuth, setLastAuth, lastAuthAddress, approveForPayment, signForPayment, handlePaymentError } = usePayment(userAddress || undefined);
+
+  // 로컬 저장소에 공유된 matchId 기록
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = localStorage.getItem('sharedPromptIds');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved) as string[];
+        setSharedPromptIds(new Set(parsed));
+      } catch (e) {
+        console.error('Failed to load sharedPromptIds', e);
+      }
+    }
+  }, []);
 
   // Load chat from history if initialChatId is provided
   useEffect(() => {
+    if (initialChat) {
+      setCurrentMessage({
+        matchId: initialChat.matchId,
+        prompt: initialChat.prompt,
+        response: initialChat.response,
+      });
+      return;
+    }
     if (initialChatId && chatHistory.length > 0) {
       const selectedChat = chatHistory.find(chat => chat.id === initialChatId);
       if (selectedChat) {
@@ -53,12 +82,24 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
           prompt: selectedChat.prompt,
           response: selectedChat.response,
         });
+        return;
       }
-    } else if (!initialChatId) {
-      // New chat - clear current message
+    }
+    if (!initialChatId && !initialChat) {
       setCurrentMessage(null);
     }
-  }, [initialChatId, chatHistory]);
+  }, [initialChatId, initialChat, chatHistory]);
+
+  const markShared = (matchId: string) => {
+    setSharedPromptIds(prev => {
+      const next = new Set(prev);
+      next.add(matchId);
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('sharedPromptIds', JSON.stringify(Array.from(next)));
+      }
+      return next;
+    });
+  };
 
   const handleBackToHome = () => {
     setCurrentMessage(null);
@@ -69,30 +110,69 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
     }
   };
 
-  const handleSubmit = async () => {
-    if (!prompt.trim()) return;
+  // 외부에서 새로운 채팅 신호가 올 때 입력/상태 초기화
+  useEffect(() => {
+    if (resetKey !== undefined) {
+      setPrompt('');
+      setCurrentMessage(null);
+      setError(null);
+    }
+  }, [resetKey]);
+
+  const handleSubmitWithPrompt = useCallback(async (promptText: string, isPaymentRetry: boolean = false, authPayload?: string | null) => {
+    if (!promptText.trim()) return;
+
+    if (!userAddress) {
+      const ok = requireAuth(() => {}, '지갑을 연결해주세요');
+      if (!ok) return;
+    }
 
     setIsLoading(true);
     setError(null);
+    setPaymentStatus('processing');
+    
+    // 결제 재시도가 아닐 때만 pendingPayment 초기화
+    if (!isPaymentRetry) {
+      setPendingPayment(null);
+    }
 
-    // 초기 메시지 설정 (프롬프트만 표시)
-    setCurrentMessage({
-      prompt: prompt.trim(),
-      response: '',
-    });
-
-    const currentPrompt = prompt.trim();
-    setPrompt('');
+    const currentPrompt = promptText.trim();
+    
+    // 프롬프트는 바로 비우되, 응답이 오기 전까지 currentMessage는 설정하지 않음 (402 시 화면 깜빡임 방지)
+    if (!isPaymentRetry) {
+      setPrompt('');
+    }
 
     try {
+      const parseAuthTs = (auth?: string | null) => {
+        if (!auth) return 0;
+        try {
+          const raw = typeof window === 'undefined' ? Buffer.from(auth, 'base64').toString('utf8') : atob(auth);
+          const parsed = JSON.parse(raw);
+          return Number(parsed?.payload?.timestamp ?? parsed?.timestamp ?? 0);
+        } catch {
+          return 0;
+        }
+      };
+      const isFresh = (auth?: string | null) => {
+        const ts = parseAuthTs(auth);
+        return ts > 0 && Date.now() - ts < AUTH_TTL_MS;
+      };
+      const authForRequest =
+        authPayload ??
+        (isFresh(paymentAuth)
+          ? paymentAuth
+          : isFresh(lastAuth)
+            ? lastAuth
+            : null);
       await arenaApi.createChatStream(
         currentPrompt,
         // onChunk: 실시간 충크 추가
         (chunk: string) => {
-          setCurrentMessage(prev => prev ? {
-            ...prev,
-            response: prev.response + chunk
-          } : null);
+          setCurrentMessage(prev => {
+            if (prev) return { ...prev, response: prev.response + chunk };
+            return { prompt: currentPrompt, response: chunk };
+          });
         },
         // onComplete: 완료 시 matchId 저장 및 히스토리 추가
         (matchId: number, promptText: string, fullResponse: string) => {
@@ -107,31 +187,136 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
           }
 
           setIsLoading(false);
+          setPaymentAuth(null);
+          setPendingPayment(null);
+          setLastAuth((paymentAuth ?? authPayload ?? lastAuth) || null);
+          setPaymentStatus('idle');
         },
         // onError: 에러 처리
         (errorMsg: string) => {
           setError(errorMsg);
           setIsLoading(false);
-        }
+          setPaymentStatus('idle');
+        },
+        authForRequest, // x402 auth payload
+        userAddress || undefined
       );
-    } catch (err) {
-      setError(err instanceof Error ? err.message : '응답 생성 실패');
-      console.error('Failed to create chat:', err);
-      setIsLoading(false);
+    } catch (err: unknown) {
+      const handled = handlePaymentError(err, currentPrompt, setPrompt, setCurrentMessage, setError, isPaymentRetry);
+      if (handled) {
+        // 자동 승인 후 재시도 시도
+        if (userAddress && pendingPayment) {
+          try {
+            setPaymentStatus('authorizing');
+            await approveForPayment(pendingPayment);
+            const authPayloadSigned = await signForPayment(pendingPayment);
+            setPaymentAuth(authPayloadSigned);
+            setLastAuth(authPayloadSigned);
+            setPendingPayment(null);
+            await handleSubmitWithPrompt(currentPrompt, true, authPayloadSigned);
+            return;
+          } catch (signErr) {
+            console.error('Auto sign failed:', signErr);
+            setPaymentStatus('requires_signature');
+            setIsLoading(false);
+            return;
+          }
+        }
+        setIsLoading(false);
+        setPaymentStatus('requires_signature');
+        setPrompt(currentPrompt);
+        setCurrentMessage(null);
+        setLastAuth(null);
+      } else {
+        setError(err instanceof Error ? err.message : '응답 생성 실패');
+        console.error('Failed to create chat:', err);
+        setIsLoading(false);
+        setPaymentStatus('idle');
+        if (!isPaymentRetry) {
+          setPrompt(currentPrompt);
+        }
+      }
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [approveForPayment, handlePaymentError, lastAuth, lastAuthAddress, paymentAuth, pendingPayment, requireAuth, setLastAuth, setPaymentAuth, setPaymentStatus, setPendingPayment, userAddress, onChatCreated]);
+
+  // 기존 handleSubmit은 현재 prompt 상태를 사용
+  const handleSubmit = useCallback(async () => {
+    await handleSubmitWithPrompt(prompt, false, null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prompt, handleSubmitWithPrompt]);
+
+  const handleApprove = async () => {
+    if (!pendingPayment || !pendingPayment.prompt) return;
+    const pendingPrompt = pendingPayment.prompt;
+
+    requireAuth(async () => {
+      setPaymentStatus('authorizing');
+      try {
+        await approveForPayment(pendingPayment);
+        const authPayloadSigned = await signForPayment(pendingPayment);
+        setPaymentAuth(authPayloadSigned);
+        setLastAuth(authPayloadSigned);
+        setPendingPayment(null);
+        await handleSubmitWithPrompt(pendingPrompt, true, authPayloadSigned);
+      } finally {
+        setPaymentStatus('idle');
+      }
+    }, '지갑을 연결해주세요');
   };
 
   const handleShare = async () => {
     if (!currentMessage || !currentMessage.matchId) return;
+    const matchId = currentMessage.matchId;
 
-    // 게시글 작성 페이지로 이동 (로그인 체크)
-    requireAuth(() => {
-      if (onShareToDashboard) {
-        onShareToDashboard(
-          currentMessage.matchId!,
-          currentMessage.prompt,
-          currentMessage.response
-        );
+    const agreed = confirm('대화 내용에 개인정보가 포함되지 않았음을 확인했으며, 공개에 동의하시나요?');
+    if (!agreed) return;
+
+    if (sharedPromptIds.has(matchId)) {
+      toast.error('이미 공유된 대화입니다', {
+        description: '대시보드에서 확인하세요.',
+      });
+      return;
+    }
+
+    const toastId = toast.loading('게시글을 공유하고 있습니다...');
+    requireAuth(async () => {
+      try {
+        setIsLoading(true);
+        const wallet = userAddress || undefined;
+        if (env.USE_MOCK_DATA) {
+          const created = await promptsApi.sharePrompt(
+            currentMessage.prompt,
+            currentMessage.response,
+            wallet,
+            undefined,
+            undefined
+          );
+          toast.success('게시글이 공유되었습니다!', {
+            id: toastId,
+            description: '대시보드에서 확인하세요.',
+          });
+          const newId = created.promptId?.toString?.() || '';
+          markShared(matchId);
+          onShareToDashboard?.(newId);
+          return;
+        }
+        const result = await arenaApi.sharePrompt(Number(matchId), wallet);
+        const sharedId = result.prompt?.id?.toString?.() || '';
+        toast.success('게시글이 공유되었습니다!', {
+          id: toastId,
+          description: '대시보드에서 확인하세요.',
+        });
+        markShared(matchId);
+        onShareToDashboard?.(sharedId);
+      } catch (err) {
+        toast.error('게시글 공유 실패', {
+          id: toastId,
+          description: err instanceof Error ? err.message : '다시 시도해주세요',
+        });
+        console.error('Failed to share prompt:', err);
+      } finally {
+        setIsLoading(false);
       }
     }, '게시글을 작성하려면 지갑을 연결해주세요');
   };
@@ -142,6 +327,7 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
       toast.success('복사되었습니다!');
     } catch (err) {
       toast.error('복사에 실패했습니다');
+      console.error(err);
     }
   };
 
@@ -149,6 +335,35 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
   if (!currentMessage) {
     return (
       <div className="min-h-[80vh] flex flex-col items-center justify-center px-4 py-16">
+        {/* Payment Alert */}
+        {pendingPayment && (
+          <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-blue-800 text-sm max-w-3xl w-full flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div>
+              <p className="font-semibold flex items-center gap-2">
+                💳 결제 승인 필요
+              </p>
+              <p className="mt-1 text-blue-600">
+                {pendingPayment.message || 'AI 모델 사용을 위해 승인만 진행하면 됩니다.'}
+                {pendingPayment.allowanceRequired && <span className="ml-1">(USDC 승인 부족)</span>}
+              </p>
+            </div>
+          <Button 
+            onClick={handleApprove} 
+            disabled={paymentStatus === 'authorizing' || paymentStatus === 'processing'}
+            className="whitespace-nowrap bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            {paymentStatus === 'authorizing' ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                승인 중...
+              </>
+            ) : (
+                '결제 승인하기'
+              )}
+            </Button>
+          </div>
+        )}
+
         {/* Error Display */}
         {error && (
           <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm max-w-3xl w-full">
@@ -192,7 +407,7 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
               </div>
               
               <Button
-                onClick={handleSubmit}
+                onClick={() => handleSubmit()}
                 disabled={!prompt.trim() || isLoading}
                 className="rounded-lg px-7 py-2.5 font-medium transition-all disabled:cursor-not-allowed"
                 style={{ 
@@ -249,6 +464,35 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
         </Button>
       </div>
 
+      {/* Payment Alert - 채팅 화면에도 표시 */}
+      {pendingPayment && !paymentAuth && (
+        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-blue-800 text-sm flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div>
+            <p className="font-semibold flex items-center gap-2">
+              💳 결제 승인 필요
+            </p>
+            <p className="mt-1 text-blue-600">
+              {pendingPayment.message || 'AI 모델 사용을 위해 승인만 진행하면 됩니다.'}
+              {pendingPayment.allowanceRequired && <span className="ml-1">(USDC 승인 부족)</span>}
+            </p>
+          </div>
+          <Button 
+            onClick={handleApprove} 
+            disabled={paymentStatus === 'authorizing' || paymentStatus === 'processing'}
+            className="whitespace-nowrap bg-blue-600 hover:bg-blue-700 text-white"
+          >
+            {paymentStatus === 'authorizing' ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                승인 중...
+              </>
+            ) : (
+              '결제 승인하기'
+            )}
+          </Button>
+        </div>
+      )}
+
       {/* Error Display */}
       {error && (
         <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">
@@ -264,7 +508,8 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
           size="icon"
           onClick={handleShare}
           className="mt-1 shrink-0"
-          title="게시글 작성하기"
+          title={currentMessage?.matchId && sharedPromptIds.has(currentMessage.matchId) ? '이미 공유된 대화입니다' : '게시글 작성하기'}
+          disabled={isLoading || !!(currentMessage?.matchId && sharedPromptIds.has(currentMessage.matchId))}
         >
           <Share2 className="w-4 h-4" />
         </Button>
@@ -277,7 +522,7 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
 
       {/* AI Response */}
       <div className="mb-6">
-        <Card className="p-6 hover:shadow-xl transition-all duration-300 border-2 max-h-[600px] flex flex-col" style={{ borderColor: '#0052FF20' }}>
+        <Card className="p-6 hover:shadow-xl transition-all duration-300 border-2 h-[800px] flex flex-col" style={{ borderColor: '#0052FF20' }}>
           <div className="flex items-center justify-between mb-4 pb-3 border-b border-gray-100">
             <div className="flex items-center gap-2">
               <h3 className="text-sm font-semibold text-gray-700">AI Assistant</h3>
@@ -329,7 +574,7 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
                 <ReactMarkdown 
                   remarkPlugins={[remarkGfm]}
                   components={{
-                    code({ node, inline, className, children, ...props }: any) {
+                    code({ inline, className, children, ...props }: { inline?: boolean; className?: string; children?: ReactNode }) {
                       const match = /language-(\w+)/.exec(className || '');
                       const language = match ? match[1] : '';
                       
@@ -353,41 +598,6 @@ export function HomePage({ onBack, initialChatId, onChatCreated, chatHistory = [
                 </ReactMarkdown>
               </div>
             )}
-          </div>
-        </Card>
-      </div>
-
-      {/* New Prompt Input */}
-      <div className="mt-8">
-        <Card className="p-4 border-2 border-gray-200 focus-within:border-[#0052FF] shadow-sm transition-all duration-200">
-          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-            <Textarea
-              placeholder="다음 배틀을 시작하려면 새로운 질문을 입력하세요..."
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              className="flex-1 min-h-[50px] resize-none !border-none focus:ring-0 focus:outline-none focus-visible:outline-none focus-visible:ring-0 !shadow-none"
-              disabled={isLoading}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                  handleSubmit();
-                }
-              }}
-            />
-            <Button 
-              className="px-8 h-auto sm:h-10 transition-all hover:scale-105 active:scale-95"
-              style={{ backgroundColor: '#0052FF' }}
-              onClick={handleSubmit}
-              disabled={isLoading || !prompt.trim()}
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Loading...
-                </>
-              ) : (
-                'Next Battle'
-              )}
-            </Button>
           </div>
         </Card>
       </div>

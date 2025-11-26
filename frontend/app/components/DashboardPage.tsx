@@ -1,16 +1,14 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Card } from './ui/card';
 import { Button } from './ui/button';
-import { Input } from './ui/input';
-import { Heart, Loader2, Clock, MessageSquare, X, Trash2 } from 'lucide-react';
-import { postsApi, arenaApi } from '../../lib/api';
+import { Heart, Loader2, Clock, Trash2 } from 'lucide-react';
+import { promptsApi, arenaApi } from '../../lib/api';
 import { useAuth } from '../hooks/useAuth';
 import { toast } from 'sonner';
 import { env } from '../../lib/config';
-import ReactMarkdown from 'react-markdown';
-import remarkGfm from 'remark-gfm';
+import { Category, CATEGORIES, CATEGORY_COLORS } from '../../lib/constants';
 
 interface Post {
   id: string;
@@ -25,6 +23,7 @@ interface Post {
   likes: number;
   isLiked?: boolean;
   tags?: string[];
+  category?: Category;
 }
 
 interface DashboardPageProps {
@@ -34,41 +33,149 @@ interface DashboardPageProps {
   onPostCreated?: () => void;
 }
 
-export function DashboardPage({ onNewChat, onSelectPost, draftPost, onPostCreated }: DashboardPageProps) {
+const sortChipClass = (active: boolean) =>
+  `px-4 py-2 rounded-full text-sm font-semibold transition-all border ${
+    active
+      ? 'bg-[#0052FF] text-white border-transparent shadow-[0_12px_30px_rgba(0,82,255,0.22)]'
+      : 'bg-white text-[#1f3b66] border-[#d7e3f7] hover:bg-[#eef3ff]'
+  }`;
+
+const categoryChipClass = (active: boolean) =>
+  `px-4 py-2 rounded-full text-sm font-medium transition-all border ${
+    active
+      ? 'bg-[#0052FF] text-white border-transparent shadow-[0_12px_30px_rgba(0,82,255,0.22)]'
+      : 'bg-white text-[#1f3b66] border-[#d7e3f7] hover:bg-[#eef3ff]'
+  }`;
+
+export function DashboardPage({ onSelectPost, draftPost, onPostCreated }: DashboardPageProps) {
   const { requireAuth, userAddress } = useAuth();
   const [posts, setPosts] = useState<Post[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isCreatingPost, setIsCreatingPost] = useState(false);
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [postTitle, setPostTitle] = useState('');
-  const [postTags, setPostTags] = useState('');
-  const [selectedTag, setSelectedTag] = useState<string | null>(null);
+  const [selectedCategory, setSelectedCategory] = useState<Category | null>(null);
   const [sortBy, setSortBy] = useState<'latest' | 'popular'>('latest');
+  const [hasMore, setHasMore] = useState(true);
+  const lastSharedMatchIdRef = useRef<string | null>(null);
+  const LIMIT = 20;
 
-  useEffect(() => {
-    loadPosts();
-  }, []);
-
-  useEffect(() => {
-    if (draftPost) {
-      setShowCreateModal(true);
-      setPostTitle(''); // 제목 초기화
+  const loadPrompts = async (append = false) => {
+    if (append) {
+      setIsLoadingMore(true);
+    } else {
+      setIsLoading(true);
     }
-  }, [draftPost]);
-
-  const loadPosts = async () => {
-    setIsLoading(true);
     setError(null);
-
     try {
-      const fetchedPosts = await postsApi.getPosts(20, 0, userAddress || undefined);
-      setPosts(fetchedPosts);
+      const offset = append ? posts.length : 0;
+      const data = await promptsApi.getPrompts(
+        LIMIT,
+        offset,
+        userAddress || undefined,
+        sortBy,
+        selectedCategory || undefined
+      );
+
+      setPosts(prev => append ? [...prev, ...data] : data);
+      setHasMore(data.length === LIMIT);
     } catch (err) {
-      setError(err instanceof Error ? err.message : '포스트 로드 실패');
-      console.error('Failed to load posts:', err);
+      setError('게시글을 불러오는데 실패했습니다.');
+      console.error(err);
     } finally {
       setIsLoading(false);
+      setIsLoadingMore(false);
+    }
+  };
+
+  useEffect(() => {
+    // 필터/정렬 변경 시 목록을 초기 로드
+    loadPrompts(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sortBy, selectedCategory, userAddress]);
+
+  // 주간 보상 카운트다운 (테스트 기본 1분)
+  // Weekly reward countdown removed (unused in UI)
+
+  useEffect(() => {
+    if (draftPost && lastSharedMatchIdRef.current !== draftPost.matchId) {
+      // Auto-share without modal
+      handleAutoShare();
+      lastSharedMatchIdRef.current = draftPost.matchId;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftPost, userAddress]);
+
+  const handleAutoShare = async () => {
+    if (!draftPost) return;
+
+    const toastId = toast.loading('게시글을 공유하고 있습니다...');
+
+    try {
+      if (env.USE_MOCK_DATA) {
+        // 테스트 모드: 로컬 스토리지에 바로 저장
+        await promptsApi.sharePrompt(
+          draftPost.prompt,
+          draftPost.response,
+          userAddress || undefined,
+          undefined,
+          undefined
+        );
+
+      await loadPrompts(false); // 목록을 새로고침해 일관성 유지
+
+        toast.success('게시글이 공유되었습니다!', {
+          id: toastId,
+          description: `제목과 카테고리가 자동 생성되었습니다.`,
+        });
+
+        if (onPostCreated) {
+          onPostCreated();
+        }
+        return;
+      }
+
+      const result = await arenaApi.sharePrompt(
+        Number(draftPost.matchId),
+        userAddress || undefined
+      );
+
+      // 새 게시글을 바로 볼 수 있도록 필터 초기화 후 목록 새로고침
+      setSelectedCategory(null);
+      setSortBy('latest');
+      await loadPrompts(false);
+
+      toast.success('게시글이 공유되었습니다!', {
+        id: toastId,
+        description: `제목과 카테고리가 자동 생성되었습니다.`,
+      });
+
+      if (onPostCreated) {
+        onPostCreated();
+      }
+
+      // 공유 완료 후 대시보드가 최신 상태로 유지되도록 카드 보기
+      if (posts.length > 0 && onSelectPost) {
+        const latestId = result?.prompt?.id?.toString?.() || posts[0].id;
+        onSelectPost(latestId);
+      }
+    } catch (err) {
+      toast.error('게시글 공유 실패', {
+        id: toastId,
+        description: err instanceof Error ? err.message : '다시 시도해주세요',
+      });
+      console.error('Failed to create post:', err);
+    }
+  };
+
+  const handleCardClick = (postId: string) => {
+    if (onSelectPost) {
+      onSelectPost(postId);
+    }
+  };
+
+  const handleLoadMore = () => {
+    if (!isLoadingMore && hasMore) {
+      loadPrompts(true);
     }
   };
 
@@ -78,7 +185,7 @@ export function DashboardPage({ onNewChat, onSelectPost, draftPost, onPostCreate
     // 권한 체크
     requireAuth(async () => {
       try {
-        const result = await postsApi.likePost(postId, userAddress || undefined);
+        const result = await promptsApi.likePrompt(postId, userAddress || undefined);
         
         if (result.ok) {
           setPosts(posts.map(post => 
@@ -105,7 +212,7 @@ export function DashboardPage({ onNewChat, onSelectPost, draftPost, onPostCreate
 
     requireAuth(async () => {
       try {
-        await postsApi.deletePost(postId, userAddress || undefined);
+        await promptsApi.deletePrompt(postId, userAddress || undefined);
         setPosts(prev => prev.filter(post => post.id !== postId));
         toast.success('게시글이 삭제되었습니다');
       } catch (err) {
@@ -117,11 +224,6 @@ export function DashboardPage({ onNewChat, onSelectPost, draftPost, onPostCreate
     }, '게시글을 삭제하려면 지갑을 연결해주세요');
   };
 
-  const handleCardClick = (postId: string) => {
-    if (onSelectPost) {
-      onSelectPost(postId);
-    }
-  };
 
   const formatTimeAgo = (dateString: string) => {
     const date = new Date(dateString);
@@ -135,185 +237,10 @@ export function DashboardPage({ onNewChat, onSelectPost, draftPost, onPostCreate
     return date.toLocaleDateString('ko-KR');
   };
 
-  const getUniqueTags = () => {
-    const tagSet = new Set<string>();
-    posts.forEach(post => {
-      post.tags?.forEach(tag => tagSet.add(tag));
-    });
-    return Array.from(tagSet).sort();
-  };
-
-  const filteredPosts = selectedTag
-    ? posts.filter(post => post.tags?.includes(selectedTag))
-    : posts;
-
-  // 정렬된 게시글
-  const sortedPosts = [...filteredPosts].sort((a, b) => {
-    if (sortBy === 'popular') {
-      return b.likes - a.likes; // 좋아요 많은 순
-    }
-    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(); // 최신순
-  });
-
-  const handleCreatePost = async () => {
-    if (!draftPost) return;
-    if (!postTitle.trim()) {
-      toast.error('제목을 입력해주세요');
-      return;
-    }
-
-    setIsCreatingPost(true);
-    try {
-      // 태그 파싱: # 제거 및 공백으로 분리
-      const tags = postTags
-        .split(/[\s,]+/)
-        .map(tag => tag.replace(/^#/, '').trim())
-        .filter(tag => tag.length > 0);
-
-      const result = await arenaApi.createPost(
-        Number(draftPost.matchId),
-        postTitle,
-        userAddress || undefined,
-        tags.length > 0 ? tags : undefined
-      );
-
-      // 새로운 포스트를 목록 맨 앞에 추가
-      const newPost: Post = {
-        id: result.post.id.toString(), // 실제 post ID 사용
-        title: result.post.title,
-        prompt: result.post.prompt,
-        response: result.post.response,
-        modelId: result.post.modelId.toString(),
-        modelName: result.post.modelName,
-        createdAt: result.post.createdAt,
-        likes: 0,
-        isLiked: false,
-        tags: result.post.tags || [],
-      };
-
-      setPosts(prev => [newPost, ...prev]);
-
-      toast.success('게시글이 작성되었습니다!', {
-        description: `모델: ${result.post.modelName} (${result.post.modelProvider})`,
-      });
-
-      setShowCreateModal(false);
-      setPostTitle('');
-      setPostTags('');
-      
-      // draftPost 초기화
-      if (onPostCreated) {
-        onPostCreated();
-      }
-    } catch (err) {
-      toast.error('게시글 작성 실패', {
-        description: err instanceof Error ? err.message : '다시 시도해주세요',
-      });
-      console.error('Failed to create post:', err);
-    } finally {
-      setIsCreatingPost(false);
-    }
-  };
-
   return (
-    <div className="max-w-7xl mx-auto px-4 py-6">
-      {/* 게시글 작성 모달 */}
-      {showCreateModal && draftPost && (
-        <>
-          {/* 오버레이 */}
-          <div 
-            className="fixed inset-0 bg-black/50 z-40"
-            onClick={() => setShowCreateModal(false)}
-          />
-          
-          {/* 모달 컨텐츠 */}
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <Card className="w-full max-w-3xl max-h-[90vh] overflow-y-auto bg-white shadow-2xl">
-              <div className="p-6">
-                <div className="flex items-center justify-between mb-6">
-                  <h2 className="text-2xl font-bold" style={{ color: '#0052FF' }}>게시글 작성</h2>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    onClick={() => setShowCreateModal(false)}
-                  >
-                    <X className="w-5 h-5" />
-                  </Button>
-                </div>
-
-                {/* 제목 입력 */}
-                <div className="mb-4">
-                  <label className="text-sm font-semibold text-gray-700 mb-2 block">제목</label>
-                  <input
-                    type="text"
-                    value={postTitle}
-                    onChange={(e) => setPostTitle(e.target.value)}
-                    placeholder="게시글 제목을 입력하세요"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    maxLength={100}
-                  />
-                </div>
-
-                {/* 태그 입력 */}
-                <div className="mb-4">
-                  <label className="text-sm font-semibold text-gray-700 mb-2 block">태그</label>
-                  <input
-                    type="text"
-                    value={postTags}
-                    onChange={(e) => setPostTags(e.target.value)}
-                    placeholder="#코딩 #수학 #AI (공백으로 구분)"
-                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-                  />
-                  <p className="text-xs text-gray-500 mt-1"># 제외하고 입력해도 됩니다 (예: 코딩 수학)</p>
-                </div>
-
-                {/* 프롬프트 (읽기 전용) */}
-                <div className="mb-4">
-                  <label className="text-sm font-semibold text-gray-700 mb-2 block">질문</label>
-                  <div className="p-4 bg-gray-50 rounded-lg border">
-                    <p className="text-gray-800">{draftPost.prompt}</p>
-                  </div>
-                </div>
-
-                {/* AI 응답 (읽기 전용) */}
-                <div className="mb-6">
-                  <label className="text-sm font-semibold text-gray-700 mb-2 block">AI 응답</label>
-                  <div className="p-4 bg-gray-50 rounded-lg border max-h-96 overflow-y-auto">
-                    <div className="prose prose-sm max-w-none">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {draftPost.response}
-                      </ReactMarkdown>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex justify-end gap-3">
-                  <Button
-                    variant="outline"
-                    onClick={() => setShowCreateModal(false)}
-                  >
-                    취소
-                  </Button>
-                  <Button
-                    onClick={handleCreatePost}
-                    disabled={isCreatingPost || !postTitle.trim()}
-                    style={{ backgroundColor: '#0052FF' }}
-                  >
-                    {isCreatingPost ? (
-                      <>
-                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                        게시 중...
-                      </>
-                    ) : (
-                      '게시하기'
-                    )}
-                  </Button>
-                </div>
-              </div>
-            </Card>
-          </div>
-        </>
-      )}
+    <div className="max-w-6xl mx-auto px-4 py-8 space-y-4">
+      {/* Weekly reward countdown */}
+   
 
       {/* Test Mode Banner */}
       {env.USE_MOCK_DATA && (
@@ -328,67 +255,46 @@ export function DashboardPage({ onNewChat, onSelectPost, draftPost, onPostCreate
         </div>
       )}
 
-      {/* Header */}
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold mb-2" style={{ color: '#0052FF' }}>
-          대시보드
-        </h1>
-        <p className="text-gray-600">
-          공유된 프롬프트를 클릭하여 대화 내용을 확인하세요
-        </p>
-      </div>
-
-      {/* Sort and Tag Filter */}
-      {!isLoading && posts.length > 0 && (
-        <div className="mb-6 space-y-3">
-          {/* Sort Buttons */}
-          <div className="flex gap-2">
-            <Button
-              onClick={() => setSortBy('latest')}
-              variant={sortBy === 'latest' ? "default" : "outline"}
-              size="sm"
-              className="rounded-full"
-              style={sortBy === 'latest' ? { backgroundColor: '#0052FF' } : {}}
-            >
-              전체
-            </Button>
-            <Button
-              onClick={() => setSortBy('popular')}
-              variant={sortBy === 'popular' ? "default" : "outline"}
-              size="sm"
-              className="rounded-full"
-              style={sortBy === 'popular' ? { backgroundColor: '#0052FF' } : {}}
-            >
-              인기순
-            </Button>
-          </div>
-
-          {/* Tag Filter */}
-          <div className="flex flex-wrap gap-2">
-            <Button
-              onClick={() => setSelectedTag(null)}
-              variant={selectedTag === null ? "default" : "outline"}
-              size="sm"
-              className="rounded-full"
-              style={selectedTag === null ? { backgroundColor: '#0052FF' } : {}}
-            >
-              전체
-            </Button>
-            {getUniqueTags().map(tag => (
-              <Button
-                key={tag}
-                onClick={() => setSelectedTag(tag)}
-                variant={selectedTag === tag ? "default" : "outline"}
-                size="sm"
-                className="rounded-full"
-                style={selectedTag === tag ? { backgroundColor: '#0052FF' } : {}}
-              >
-                #{tag}
-              </Button>
-            ))}
-          </div>
+      {/* Sort and Category Filter */}
+      <div className="mb-6 space-y-3">
+        <div className="flex gap-2">
+          <button
+            type="button"
+            onClick={() => setSortBy('latest')}
+            className={sortChipClass(sortBy === 'latest')}
+          >
+            최신순
+          </button>
+          <button
+            type="button"
+            onClick={() => setSortBy('popular')}
+            className={sortChipClass(sortBy === 'popular')}
+          >
+            인기순
+          </button>
         </div>
-      )}
+
+        {/* Category Filter */}
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => setSelectedCategory(null)}
+            className={categoryChipClass(selectedCategory === null)}
+          >
+            전체
+          </button>
+          {CATEGORIES.map(category => (
+            <button
+              type="button"
+              key={category}
+              onClick={() => setSelectedCategory(category)}
+              className={categoryChipClass(selectedCategory === category)}
+            >
+              {category}
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* Error Display */}
       {error && (
@@ -414,92 +320,100 @@ export function DashboardPage({ onNewChat, onSelectPost, draftPost, onPostCreate
         </div>
       )}
 
-      {!isLoading && sortedPosts.length === 0 && posts.length > 0 && (
-        <div className="text-center py-12">
-          <p className="text-gray-500 text-lg">해당 카테고리의 포스트가 없습니다</p>
-        </div>
-      )}
+      {!isLoading && posts.length > 0 && (
+        <>
+          <div className="flex flex-col gap-4">
+            {posts.map((post) => (
+              <Card
+                key={post.id}
+                onClick={() => handleCardClick(post.id)}
+                className="p-4 border border-[#e5eaf5] bg-white/95 hover:bg-white rounded-2xl shadow-[0_8px_28px_rgba(43,91,173,0.06)] hover:shadow-[0_12px_32px_rgba(43,91,173,0.1)] hover:-translate-y-0.5 transition-all duration-200 cursor-pointer group relative flex flex-row items-start gap-3"
+              >
+                {/* 삭제 버튼 - 자신의 게시글인 경우만 표시 */}
+                {post.userName === userAddress && (
+                  <button
+                    onClick={(e) => handleDelete(post.id, e)}
+                    className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors opacity-0 group-hover:opacity-100 z-10"
+                    title="게시글 삭제"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
 
-      {!isLoading && sortedPosts.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {sortedPosts.map((post) => (
-            <Card
-              key={post.id}
-              onClick={() => handleCardClick(post.id)}
-              className="p-5 border hover:shadow-lg transition-all duration-200 cursor-pointer group relative"
-              style={{ borderColor: '#E5E7EB' }}
-            >
-              {/* 삭제 버튼 - 자신의 게시글인 경우만 표시 */}
-              {post.userName === userAddress && (
-                <button
-                  onClick={(e) => handleDelete(post.id, e)}
-                  className="absolute top-3 right-3 p-1.5 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-full transition-colors opacity-0 group-hover:opacity-100"
-                  title="게시글 삭제"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
-
-              {/* 제목 */}
-              <h3 className="text-lg font-bold text-gray-900 mb-3 line-clamp-2 group-hover:text-blue-600 transition-colors pr-8">
-                {post.title || post.prompt.substring(0, 50) + '...'}
-              </h3>
-
-              {/* 프롬프트 미리보기 */}
-              <p className="text-sm text-gray-600 mb-3 line-clamp-2">
-                {post.prompt}
-              </p>
-
-              {/* 태그 */}
-              {post.tags && post.tags.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-3">
-                  {post.tags.map((tag, index) => (
-                    <span
-                      key={index}
-                      className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200"
-                    >
-                      #{tag}
-                    </span>
-                  ))}
-                </div>
-              )}
-
-              {/* Footer */}
-              <div className="flex items-center justify-between text-xs text-gray-500">
-                <div className="flex items-center gap-3">
-                  {/* 모델 정보 */}
-                  {post.modelName && (
-                    <span className="flex items-center gap-1">
-                      <MessageSquare className="w-3.5 h-3.5" />
-                      {post.modelName}
-                    </span>
-                  )}
-                  
-                  {/* 시간 */}
-                  <span className="flex items-center gap-1">
-                    <Clock className="w-3.5 h-3.5" />
-                    {formatTimeAgo(post.createdAt)}
-                  </span>
+                {/* Left: Like Button */}
+                <div className="flex flex-col items-center min-w-[54px] pt-0.5">
+                  <button
+                    onClick={(e) => handleLike(post.id, e)}
+                    aria-pressed={!!post.isLiked}
+                    className={`flex flex-col items-center gap-1 px-2 py-2 rounded-2xl border transition-all ${
+                      post.isLiked
+                        ? 'text-[#ff6b81] border-[#ffd8e1] bg-[#fff1f4] shadow-[0_8px_24px_rgba(255,105,140,0.18)]'
+                        : 'text-[#9aa8c4] border-transparent hover:text-[#ff6b81] hover:bg-[#f7f9fe] hover:border-[#e5eaf5]'
+                    }`}
+                  >
+                    <Heart
+                      className={`w-5 h-5 ${post.isLiked ? 'fill-current' : ''}`}
+                    />
+                    <span className="text-[13px] font-semibold text-[#7a879f]">{post.likes}</span>
+                  </button>
                 </div>
 
-                {/* 좋아요 */}
-                <button
-                  onClick={(e) => handleLike(post.id, e)}
-                  className={`flex items-center gap-1 px-2 py-1 rounded transition-colors ${
-                    post.isLiked
-                      ? 'text-red-600'
-                      : 'text-gray-600 hover:text-red-600'
-                  }`}
-                >
-                  <Heart
-                    className={`w-4 h-4 ${post.isLiked ? 'fill-current' : ''}`}
-                  />
-                  <span className="text-sm font-medium">{post.likes}</span>
-                </button>
-              </div>
-            </Card>
-          ))}
-        </div>
+                {/* Middle: Content */}
+                <div className="flex-1 min-w-0 flex flex-col gap-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-1.5">
+                    <div className="min-w-0">
+                      <h3 className="text-base font-bold text-gray-900 group-hover:text-[#1b5cff] transition-colors truncate">
+                        {post.title || 'Auto-generated Title'}
+                      </h3>
+                      <p className="text-sm text-gray-600 mt-1 line-clamp-1">
+                        {post.prompt}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 text-[13px] text-[#98a2b3] shrink-0 pt-0.5">
+                      <Clock className="w-4 h-4" />
+                      <span>{formatTimeAgo(post.createdAt)}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    {post.category && (
+                      <span className={`inline-flex items-center px-3 py-1 rounded-full text-[12px] font-semibold border ${CATEGORY_COLORS[post.category]}`}>
+                        {post.category}
+                      </span>
+                    )}
+                    <div className="flex items-center gap-2 text-[13px] text-[#6b7a99]">
+                      <div className="w-7 h-7 rounded-full bg-[#f1f5fb] text-[#365486] flex items-center justify-center text-[11px] font-bold">
+                        US
+                      </div>
+                      <span className="truncate max-w-[220px]">{post.userName || 'User'}</span>
+                    </div>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+
+          {/* Load More */}
+          {hasMore && (
+            <div className="flex justify-center mt-6">
+              <Button
+                onClick={handleLoadMore}
+                variant="outline"
+                disabled={isLoadingMore}
+                className="rounded-full px-6"
+              >
+                {isLoadingMore ? (
+                  <>
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    불러오는 중...
+                  </>
+                ) : (
+                  '더 보기'
+                )}
+              </Button>
+            </div>
+          )}
+        </>
       )}
 
       {/* Footer */}
@@ -511,4 +425,3 @@ export function DashboardPage({ onNewChat, onSelectPost, draftPost, onPostCreate
     </div>
   );
 }
-
