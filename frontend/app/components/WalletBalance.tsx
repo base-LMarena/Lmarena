@@ -3,7 +3,7 @@
 import { useWallet } from '@/app/hooks/use-wallet';
 import { useBalance, useReadContract, useWriteContract, useWaitForTransactionReceipt } from 'wagmi';
 import { Wallet, Droplets } from 'lucide-react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { toast } from 'sonner';
 
 import { USDC_ADDRESS, FAUCET_ADDRESS, FAUCET_ABI } from '@/lib/contracts/usdc-config';
@@ -14,6 +14,9 @@ import { USDC_ADDRESS, FAUCET_ADDRESS, FAUCET_ABI } from '@/lib/contracts/usdc-c
 export function WalletBalance() {
   const { isAuthenticated, address, chainId } = useWallet();
   const [isMounted, setIsMounted] = useState(false);
+
+  // 이전 지갑 주소 추적
+  const previousAddressRef = useRef<string | null>(null);
 
   // 클라이언트에서만 마운트
   useEffect(() => {
@@ -40,6 +43,26 @@ export function WalletBalance() {
       enabled: isMounted && isAuthenticated && !!address,
     },
   });
+
+  // 지갑 주소 변경 시 상태 갱신
+  useEffect(() => {
+    if (!isMounted || !address) return;
+
+    const currentAddress = address.toLowerCase();
+    const previousAddress = previousAddressRef.current?.toLowerCase();
+
+    // 지갑 주소가 변경되었을 때 상태 갱신
+    if (previousAddress && currentAddress !== previousAddress) {
+      console.log(`WalletBalance: Address changed from ${previousAddress} to ${currentAddress}`);
+      // 약간의 딜레이 후 refetch (컨트랙트 쿼리가 새 주소로 업데이트된 후)
+      setTimeout(() => {
+        refetchBalance();
+        refetchCanClaim();
+      }, 100);
+    }
+
+    previousAddressRef.current = address;
+  }, [address, isMounted, refetchBalance, refetchCanClaim]);
 
   // Faucet claim 트랜잭션
   const { writeContract, data: txHash, isPending: isClaiming } = useWriteContract();
